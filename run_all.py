@@ -11,7 +11,8 @@ def ejecutar_scripts():
     print(f"Ejecutando scripts a las {datetime.now()}")
     subprocess.run(["python", os.path.join(current_dir, "Stocks2.py")])
     subprocess.run(["python", os.path.join(current_dir, "StocksAnalysis.py")])
-    subprocess.run(["streamlit", "run", os.path.join(current_dir, "Main.py")])
+    subprocess.run(["python", os.path.join(current_dir, "Main.py")])
+    subprocess.run(["streamlit", "run", os.path.join(current_dir, "app.py")])
 
 def verificar_y_ejecutar():
     ahora = datetime.now()

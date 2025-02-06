@@ -1,17 +1,16 @@
-import streamlit as st
-import pandas as pd
-from sqlalchemy import create_engine, Column, String, Float, Integer, Boolean
+from flask import Flask, jsonify, request
+from sqlalchemy import create_engine, Column, String, Float, Integer, Boolean, func
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-st.set_page_config(layout="wide")
-
-# Configuración de la base de datos
+# Configuración de Flask y SQLAlchemy
+app = Flask(__name__)
 DATABASE_URL = "postgresql://postgres:1234@localhost:5432/StocksApp"
 engine = create_engine(DATABASE_URL)
 Base = declarative_base()
 Session = sessionmaker(bind=engine)
 session = Session()
 
+# Definición de modelos
 class Stock(Base):
     __tablename__ = 'stocks'
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -38,108 +37,114 @@ class Compra(Base):
 
 Base.metadata.create_all(engine)
 
-# Cargar datos desde la base de datos
-stocks = session.query(Stock).all()
-df = pd.DataFrame([{
-    'Symbol': stock.symbol,
-    'Name': stock.name,
-    'Price': stock.price,
-    'BPS1': stock.bps1,
-    'BPS2': stock.bps2,
-    'BPS3': stock.bps3,
-    'BPS4': stock.bps4,
-    'P/E Actual': stock.pe_actual,
-    'P/E Histórico': stock.pe_historico
-} for stock in stocks])
+# Rutas de la API
+@app.route('/stocks', methods=['GET'])
+def get_stocks():
+    stocks = session.query(Stock).all()
+    data = [{
+        'Symbol': s.symbol,
+        'Name': s.name,
+        'Price': s.price,
+        'BPS1': s.bps1,
+        'BPS2': s.bps2,
+        'BPS3': s.bps3,
+        'BPS4': s.bps4,
+        'P/E Actual': s.pe_actual,
+        'P/E Histórico': s.pe_historico,
+        'Recomendado': s.recomendado
+    } for s in stocks]
+    return jsonify(data)
 
-try:
-    df_recomendadas = df[df['recomendado'] == True]
-except KeyError:
-    st.error("No se encontraron recomendaciones. Asegúrate de que se hayan generado correctamente.")
-    df_recomendadas = pd.DataFrame()
+@app.route('/compras', methods=['GET'])
+def get_compras():
+    compras = session.query(Compra).all()
+    data = [{
+        'Symbol': c.symbol,
+        'Name': c.name,
+        'Price': c.price,
+        'Quantity': c.quantity,
+        'Total Investment': c.total_investment,
+        'Portfolio Percentage': c.portfolio_percentage
+    } for c in compras]
+    return jsonify(data)
 
-compras = session.query(Compra).all()
-df_compras = pd.DataFrame([{
-    'Symbol': compra.symbol,
-    'Name': compra.name,
-    'Price': compra.price,
-    'Quantity': compra.quantity,
-    'Total Investment': compra.total_investment,
-    'Portfolio Percentage': compra.portfolio_percentage
-} for compra in compras])
+@app.route('/compras', methods=['POST'])
+def add_compra():
+    data = request.json
+    symbol = data.get('symbol')
+    quantity = int(data.get('quantity'))
 
-st.title("📊 Análisis de Acciones")
+    if not symbol or quantity <= 0:
+        return jsonify({'error': 'Datos inválidos'}), 400
 
-col1, col2 = st.columns(2)
+    stock = session.query(Stock).filter_by(symbol=symbol).first()
+    if not stock:
+        return jsonify({'error': 'Símbolo no encontrado'}), 404
 
-with col1:
-    st.subheader("➕ Agregar nueva compra")
-    symbol = st.text_input("Símbolo de la acción", key="symbol_compra")
-    quantity = st.number_input("Cantidad de acciones", min_value=1, step=1, key="quantity_compra")
+    compra = session.query(Compra).filter_by(symbol=symbol).first()
+    price = stock.price
+    total_investment = price * quantity
 
-    if st.button("Agregar compra"):
-        if symbol and quantity > 0:
-            accion = df[df["Symbol"] == symbol]
-            if not accion.empty:
-                name = accion.iloc[0]["Name"]
-                price = accion.iloc[0]["Price"]
-                total_investment = price * quantity
-                compra = session.query(Compra).filter_by(symbol=symbol).first()
-                if compra:
-                    compra.quantity += quantity
-                    compra.total_investment += total_investment
-                else:
-                    new_compra = Compra(
-                        symbol=symbol,
-                        name=name,
-                        price=price,
-                        quantity=quantity,
-                        total_investment=total_investment,
-                        portfolio_percentage=0
-                    )
-                    session.add(new_compra)
-                session.commit()
-                st.success(f"Compra de {quantity} acciones de {symbol} agregada.")
-            else:
-                st.error("Símbolo no encontrado en la base de datos.")
+    if compra:
+        compra.quantity += quantity
+        compra.total_investment += total_investment
+    else:
+        compra = Compra(
+            symbol=symbol, name=stock.name, price=price,
+            quantity=quantity, total_investment=total_investment, portfolio_percentage=0
+        )
+        session.add(compra)
+
+    # Calcular y actualizar el porcentaje del portafolio
+    total_investment_all = session.query(Compra).with_entities(func.sum(Compra.total_investment)).scalar()
+    for compra in session.query(Compra).all():
+        if total_investment_all > 0:
+            compra.portfolio_percentage = (compra.total_investment / total_investment_all) * 100
         else:
-            st.error("Por favor, ingrese un símbolo válido y una cantidad mayor a 0.")
+            compra.portfolio_percentage = 0
 
-with col2:
-    st.subheader("➖ Agregar nueva venta")
-    symbol_venta = st.text_input("Símbolo de la acción a vender", key="symbol_venta")
-    quantity_venta = st.number_input("Cantidad de acciones a vender", min_value=1, step=1, key="quantity_venta")
+    session.commit()
+    return jsonify({'message': 'Compra registrada'}), 201
 
-    if st.button("Agregar venta"):
-        if symbol_venta and quantity_venta > 0:
-            compra = session.query(Compra).filter_by(symbol=symbol_venta).first()
-            if compra:
-                if compra.quantity >= quantity_venta:
-                    compra.quantity -= quantity_venta
-                    compra.total_investment -= compra.price * quantity_venta
-                    if compra.quantity == 0:
-                        session.delete(compra)
-                    session.commit()
-                    st.success(f"Venta de {quantity_venta} acciones de {symbol_venta} registrada.")
-                else:
-                    st.error("No tienes suficientes acciones para vender.")
-            else:
-                st.error("Símbolo no encontrado en el archivo de compras.")
+@app.route('/ventas', methods=['POST'])
+def sell_stock():
+    data = request.json
+    symbol = data.get('symbol')
+    quantity = int(data.get('quantity'))
+
+    if not symbol or quantity <= 0:
+        return jsonify({'error': 'Datos inválidos'}), 400
+
+    compra = session.query(Compra).filter_by(symbol=symbol).first()
+    if not compra:
+        return jsonify({'error': 'Símbolo no encontrado en portafolio'}), 404
+
+    if compra.quantity < quantity:
+        return jsonify({'error': 'No tienes suficientes acciones'}), 400
+
+    compra.quantity -= quantity
+    compra.total_investment -= compra.price * quantity
+    if compra.quantity == 0:
+        session.delete(compra)
+
+    # Calcular y actualizar el porcentaje del portafolio
+    total_investment_all = session.query(Compra).with_entities(func.sum(Compra.total_investment)).scalar()
+    for compra in session.query(Compra).all():
+        if total_investment_all > 0:
+            compra.portfolio_percentage = (compra.total_investment / total_investment_all) * 100
         else:
-            st.error("Por favor, ingrese un símbolo válido y una cantidad mayor a 0.")
+            compra.portfolio_percentage = 0
 
-total_investment = df_compras["Total Investment"].sum()
-for compra in session.query(Compra).all():
-    compra.portfolio_percentage = (compra.total_investment / total_investment) * 100
-session.commit()
+    session.commit()
+    return jsonify({'message': 'Venta registrada'}), 200
 
-st.subheader("💼 Acciones en tu portafolio")
-st.dataframe(df_compras)
-
-df_vender = df_compras[~df_compras["Symbol"].isin(df_recomendadas["Symbol"])]
-
-st.subheader("⚠️ Acciones a vender")
-st.dataframe(df_vender)
-
-st.subheader("🔹 Acciones recomendadas para inversión")
-st.dataframe(df_recomendadas)
+@app.route('/acciones-recomendadas', methods=['GET'])
+def get_recommended():
+    recomendadas = session.query(Stock).filter_by(recomendado=True).all()
+    data = [{'Symbol': s.symbol, 'Name': s.name, 'Price': s.price} for s in recomendadas]
+    return jsonify(data)
+@app.route('/')
+def home():
+    return "¡Bienvenido a StocksApp! La API está funcionando."
+if __name__ == '__main__':
+    app.run(debug=True)

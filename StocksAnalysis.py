@@ -3,6 +3,10 @@ from sqlalchemy import create_engine, Column, String, Float, Integer, Boolean
 from sqlalchemy.orm import declarative_base, sessionmaker
 from plyer import notification
 import yfinance as yf
+import logging
+
+# Configuración de logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Configuración de la base de datos
 DATABASE_URL = "postgresql://postgres:1234@localhost:5432/StocksApp"
@@ -44,7 +48,7 @@ def obtener_valor_vix():
         vix_value = vix.history(period="1d")["Close"].iloc[-1]
         return float(vix_value)
     except Exception as e:
-        print(f"Error al obtener el valor del VIX: {e}")
+        logging.error(f"Error al obtener el valor del VIX: {e}")
         return None
 
 # Verificar el valor del VIX y enviar notificación si supera 25
@@ -58,6 +62,10 @@ if vix_value and vix_value > 25:
 
 # Cargar datos desde la base de datos
 stocks = session.query(Stock).all()
+if not stocks:
+    logging.error("No se encontraron datos en la base de datos.")
+    exit()
+
 df = pd.DataFrame([{
     'Symbol': stock.symbol,
     'Name': stock.name,
@@ -71,8 +79,8 @@ df = pd.DataFrame([{
 } for stock in stocks])
 
 # Verificar los datos cargados
-print("Datos cargados:")
-print(df.head())
+logging.info("Datos cargados:")
+logging.info(df.head())
 
 # Aplicar condiciones de inversión
 df_recomendadas = df[
@@ -83,8 +91,8 @@ df_recomendadas = df[
 ]
 
 # Verificar las condiciones aplicadas
-print("Condiciones aplicadas:")
-print(df_recomendadas.head())
+logging.info("Condiciones aplicadas:")
+logging.info(df_recomendadas.head())
 
 # Guardar las acciones recomendadas en la base de datos
 for idx, row in df_recomendadas.iterrows():
@@ -139,5 +147,5 @@ if acciones_vender:
     )
 
 # Mostrar las acciones recomendadas
-print("📊 Acciones recomendadas para inversión:")
-print(df_recomendadas[['Symbol', 'Name', 'Price', 'BPS1', 'BPS2', 'BPS3', 'BPS4', 'P/E Actual', 'P/E Histórico']])
+logging.info("📊 Acciones recomendadas para inversión:")
+logging.info(df_recomendadas[['Symbol', 'Name', 'Price', 'BPS1', 'BPS2', 'BPS3', 'BPS4', 'P/E Actual', 'P/E Histórico']])
