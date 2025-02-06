@@ -1,93 +1,107 @@
+import aiohttp
+import asyncio
 import yfinance as yf
-from openpyxl import Workbook, load_workbook
-import time
-import random
 from bs4 import BeautifulSoup
-import requests
+from sqlalchemy import create_engine, Column, String, Float, Integer, Boolean
+from sqlalchemy.orm import declarative_base, sessionmaker
+import logging
+
+# Configuración de logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # URL de Wikipedia con la lista de acciones del S&P 500
 URL_SP500 = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
 
-# Obtener la tabla de Wikipedia
-response = requests.get(URL_SP500)
-soup = BeautifulSoup(response.text, 'html.parser')
-tabla = soup.find('table')
+# Configuración de la base de datos
+DATABASE_URL = "postgresql://postgres:1234@localhost:5432/StocksApp"
+engine = create_engine(DATABASE_URL)
+Base = declarative_base()
 
-# Verificar si la tabla fue encontrada
-if not tabla:
-    raise Exception("No se encontró la tabla en la página de Wikipedia.")
+class Stock(Base):
+    __tablename__ = 'stocks'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    symbol = Column(String, unique=True, nullable=False)
+    name = Column(String, nullable=False)
+    price = Column(Float)
+    bps1 = Column(Float)
+    bps2 = Column(Float)
+    bps3 = Column(Float)
+    bps4 = Column(Float)
+    pe_actual = Column(Float)
+    pe_historico = Column(Float)
+    recomendado = Column(Boolean, default=False)
 
-filas = tabla.find_all('tr')
+Base.metadata.create_all(engine)
+Session = sessionmaker(bind=engine)
+session = Session()
 
-# Extraer solo los símbolos y nombres de las acciones
-datos = [["Symbol", "Name"]]
-for fila in filas[1:]:  # Saltamos la primera fila de encabezados
-    celdas = fila.find_all('td')
-    if len(celdas) > 1:
-        symbol = celdas[0].text.strip()
-        name = celdas[1].text.strip()
-        datos.append([symbol, name])
-
-# Guardar en un archivo Excel
-wb = Workbook()
-ws = wb.active
-for row in datos:
-    ws.append(row)
-
-# Agregar encabezados para los nuevos datos
-ws.cell(row=1, column=3, value='Price')  # Precio actual
-ws.cell(row=1, column=4, value='BPS1')
-ws.cell(row=1, column=5, value='BPS2')
-ws.cell(row=1, column=6, value='BPS3')
-ws.cell(row=1, column=7, value='BPS4')
-ws.cell(row=1, column=8, value='P/E Actual')
-ws.cell(row=1, column=9, value='P/E Histórico')
-
-wb.save('acciones.xlsx')
-
-# Cargar archivo Excel
-wb = load_workbook('acciones.xlsx')
-ws = wb.active
-
-# Iterar sobre los símbolos de las acciones
-for idx, row in enumerate(ws.iter_rows(min_row=2, min_col=1, max_col=1, values_only=True), start=2):
-    symbol = row[0]
-    print(f'🔍 Buscando datos para {symbol}...')
-
+async def fetch_sp500_symbols():
     try:
-        stock = yf.Ticker(symbol)
-
-        # Obtener el precio actual
-        price = stock.history(period="1d")['Close'].iloc[-1]
-        ws.cell(row=idx, column=3, value=price)
-        print(f'✅ {symbol} - Precio: {price}')
-
-        # Obtener EPS de los últimos 5 años
-        earnings = stock.financials.loc['Diluted EPS'].dropna().tolist()[:5]  # Tomar los últimos 5 años
-        for i, eps in enumerate(earnings):
-            ws.cell(row=idx, column=4 + i, value=eps)
-        print(f'✅ {symbol} - EPS Históricos: {earnings}')
-
-        # Obtener P/E Actual
-        pe_actual = stock.info.get("trailingPE", "N/A")
-        ws.cell(row=idx, column=8, value=pe_actual)
-        print(f'✅ {symbol} - P/E Actual: {pe_actual}')
-
-        # Calcular P/E Histórico
-        pe_historico = []
-        for i, eps in enumerate(earnings):
-            if eps > 0:
-                pe_historico.append(price / eps)
-        if pe_historico:
-            pe_historico_avg = sum(pe_historico) / len(pe_historico)
-        else:
-            pe_historico_avg = "N/A"
-        ws.cell(row=idx, column=9, value=pe_historico_avg)
-        print(f'✅ {symbol} - P/E Histórico: {pe_historico_avg}')
-
+        async with aiohttp.ClientSession() as session:
+            async with session.get(URL_SP500) as response:
+                html = await response.text()
+                return html
     except Exception as e:
-        print(f'❌ Error al obtener datos de {symbol}: {e}')
+        logging.error(f"Error al obtener la lista de símbolos del S&P 500: {e}")
+        return None
 
-# Guardar los datos en el Excel
-wb.save('acciones.xlsx')
-print('\n✅ Proceso completado. Datos guardados en "acciones.xlsx".')
+async def main():
+    html = await fetch_sp500_symbols()
+    if not html:
+        logging.error("No se pudo obtener la lista de símbolos del S&P 500.")
+        return
+
+    soup = BeautifulSoup(html, 'html.parser')
+    tabla = soup.find('table')
+
+    if not tabla:
+        logging.error("No se encontró la tabla en la página de Wikipedia.")
+        return
+
+    filas = tabla.find_all('tr')
+    for fila in filas[1:]:
+        celdas = fila.find_all('td')
+        if len(celdas) > 1:
+            symbol = celdas[0].text.strip()
+            name = celdas[1].text.strip()
+            if not session.query(Stock).filter_by(symbol=symbol).first():
+                stock = Stock(symbol=symbol, name=name)
+                session.add(stock)
+
+    session.commit()
+
+    for stock in session.query(Stock).all():
+        logging.info(f'🔍 Buscando datos para {stock.symbol}...')
+
+        try:
+            yf_stock = yf.Ticker(stock.symbol)
+            price = float(yf_stock.history(period="1d")['Close'].iloc[-1])
+            stock.price = price
+            logging.info(f'✅ {stock.symbol} - Precio: {price}')
+
+            earnings = [float(eps) for eps in yf_stock.financials.loc['Diluted EPS'].dropna().tolist()[:5]]
+            if len(earnings) >= 4:
+                stock.bps1, stock.bps2, stock.bps3, stock.bps4 = earnings[:4]
+            logging.info(f'✅ {stock.symbol} - EPS Históricos: {earnings}')
+
+            stock.pe_actual = float(yf_stock.info.get("trailingPE", "N/A"))
+            logging.info(f'✅ {stock.symbol} - P/E Actual: {stock.pe_actual}')
+
+            pe_historico = []
+            for eps in earnings:
+                if eps > 0:
+                    pe_historico.append(price / eps)
+            if pe_historico:
+                stock.pe_historico = sum(pe_historico) / len(pe_historico)
+            else:
+                stock.pe_historico = None
+            logging.info(f'✅ {stock.symbol} - P/E Histórico: {stock.pe_historico}')
+
+        except Exception as e:
+            logging.error(f'❌ Error al obtener datos de {stock.symbol}: {e}')
+
+    session.commit()
+    logging.info('\n✅ Proceso completado. Datos guardados en la base de datos.')
+
+if __name__ == "__main__":
+    asyncio.run(main())
