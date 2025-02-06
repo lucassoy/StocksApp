@@ -1,23 +1,72 @@
 import streamlit as st
 import pandas as pd
-from openpyxl import load_workbook
+from sqlalchemy import create_engine, Column, String, Float, Integer, Boolean
+from sqlalchemy.orm import declarative_base, sessionmaker
 
 st.set_page_config(layout="wide")
 
-# Cargar datos desde el Excel generado previamente
-df = pd.read_excel("acciones.xlsx")
-df["Symbol"] = df["Symbol"].astype(str).str.strip()
+# Configuración de la base de datos
+DATABASE_URL = "postgresql://postgres:1234@localhost:5432/StocksApp"
+engine = create_engine(DATABASE_URL)
+Base = declarative_base()
+Session = sessionmaker(bind=engine)
+session = Session()
+
+class Stock(Base):
+    __tablename__ = 'stocks'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    symbol = Column(String, unique=True, nullable=False)
+    name = Column(String, nullable=False)
+    price = Column(Float)
+    bps1 = Column(Float)
+    bps2 = Column(Float)
+    bps3 = Column(Float)
+    bps4 = Column(Float)
+    pe_actual = Column(Float)
+    pe_historico = Column(Float)
+    recomendado = Column(Boolean, default=False)
+
+class Compra(Base):
+    __tablename__ = 'compras'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    symbol = Column(String, nullable=False)
+    name = Column(String, nullable=False)
+    price = Column(Float)
+    quantity = Column(Integer)
+    total_investment = Column(Float)
+    portfolio_percentage = Column(Float)
+
+Base.metadata.create_all(engine)
+
+# Cargar datos desde la base de datos
+stocks = session.query(Stock).all()
+df = pd.DataFrame([{
+    'Symbol': stock.symbol,
+    'Name': stock.name,
+    'Price': stock.price,
+    'BPS1': stock.bps1,
+    'BPS2': stock.bps2,
+    'BPS3': stock.bps3,
+    'BPS4': stock.bps4,
+    'P/E Actual': stock.pe_actual,
+    'P/E Histórico': stock.pe_historico
+} for stock in stocks])
 
 try:
-    df_recomendadas = pd.read_excel("recomendaciones.xlsx")
-except FileNotFoundError:
-    st.error("El archivo 'recomendaciones.xlsx' no se encontró. Asegúrate de que se haya generado correctamente.")
+    df_recomendadas = df[df['recomendado'] == True]
+except KeyError:
+    st.error("No se encontraron recomendaciones. Asegúrate de que se hayan generado correctamente.")
     df_recomendadas = pd.DataFrame()
 
-try:
-    df_compras = pd.read_excel("compras.xlsx")
-except FileNotFoundError:
-    df_compras = pd.DataFrame(columns=["Symbol", "Name", "Price", "Quantity", "Total Investment", "Portfolio Percentage"])
+compras = session.query(Compra).all()
+df_compras = pd.DataFrame([{
+    'Symbol': compra.symbol,
+    'Name': compra.name,
+    'Price': compra.price,
+    'Quantity': compra.quantity,
+    'Total Investment': compra.total_investment,
+    'Portfolio Percentage': compra.portfolio_percentage
+} for compra in compras])
 
 st.title("📊 Análisis de Acciones")
 
@@ -35,23 +84,24 @@ with col1:
                 name = accion.iloc[0]["Name"]
                 price = accion.iloc[0]["Price"]
                 total_investment = price * quantity
-                if symbol in df_compras["Symbol"].values:
-                    df_compras.loc[df_compras["Symbol"] == symbol, "Quantity"] += quantity
-                    df_compras.loc[df_compras["Symbol"] == symbol, "Total Investment"] += total_investment
+                compra = session.query(Compra).filter_by(symbol=symbol).first()
+                if compra:
+                    compra.quantity += quantity
+                    compra.total_investment += total_investment
                 else:
-                    new_row = pd.DataFrame({
-                        "Symbol": [symbol],
-                        "Name": [name],
-                        "Price": [price],
-                        "Quantity": [quantity],
-                        "Total Investment": [total_investment],
-                        "Portfolio Percentage": [0]
-                    })
-                    df_compras = pd.concat([df_compras, new_row], ignore_index=True)
-                df_compras.to_excel("compras.xlsx", index=False)
+                    new_compra = Compra(
+                        symbol=symbol,
+                        name=name,
+                        price=price,
+                        quantity=quantity,
+                        total_investment=total_investment,
+                        portfolio_percentage=0
+                    )
+                    session.add(new_compra)
+                session.commit()
                 st.success(f"Compra de {quantity} acciones de {symbol} agregada.")
             else:
-                st.error("Símbolo no encontrado en el archivo de acciones.")
+                st.error("Símbolo no encontrado en la base de datos.")
         else:
             st.error("Por favor, ingrese un símbolo válido y una cantidad mayor a 0.")
 
@@ -62,14 +112,14 @@ with col2:
 
     if st.button("Agregar venta"):
         if symbol_venta and quantity_venta > 0:
-            accion = df_compras[df_compras["Symbol"] == symbol_venta]
-            if not accion.empty:
-                current_quantity = accion.iloc[0]["Quantity"]
-                if current_quantity >= quantity_venta:
-                    df_compras.loc[df_compras["Symbol"] == symbol_venta, "Quantity"] -= quantity_venta
-                    df_compras.loc[df_compras["Symbol"] == symbol_venta, "Total Investment"] -= accion.iloc[0]["Price"] * quantity_venta
-                    df_compras = df_compras[df_compras["Quantity"] > 0]
-                    df_compras.to_excel("compras.xlsx", index=False)
+            compra = session.query(Compra).filter_by(symbol=symbol_venta).first()
+            if compra:
+                if compra.quantity >= quantity_venta:
+                    compra.quantity -= quantity_venta
+                    compra.total_investment -= compra.price * quantity_venta
+                    if compra.quantity == 0:
+                        session.delete(compra)
+                    session.commit()
                     st.success(f"Venta de {quantity_venta} acciones de {symbol_venta} registrada.")
                 else:
                     st.error("No tienes suficientes acciones para vender.")
@@ -79,8 +129,9 @@ with col2:
             st.error("Por favor, ingrese un símbolo válido y una cantidad mayor a 0.")
 
 total_investment = df_compras["Total Investment"].sum()
-df_compras["Portfolio Percentage"] = (df_compras["Total Investment"] / total_investment) * 100
-df_compras.to_excel("compras.xlsx", index=False)
+for compra in session.query(Compra).all():
+    compra.portfolio_percentage = (compra.total_investment / total_investment) * 100
+session.commit()
 
 st.subheader("💼 Acciones en tu portafolio")
 st.dataframe(df_compras)

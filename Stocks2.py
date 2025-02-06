@@ -1,11 +1,34 @@
 import aiohttp
 import asyncio
-from openpyxl import Workbook, load_workbook
 import yfinance as yf
 from bs4 import BeautifulSoup
+from sqlalchemy import create_engine, Column, String, Float, Integer
+from sqlalchemy.orm import declarative_base, sessionmaker
 
 # URL de Wikipedia con la lista de acciones del S&P 500
 URL_SP500 = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
+
+# Configuración de la base de datos
+DATABASE_URL = "postgresql://postgres:1234@localhost:5432/StocksApp"
+engine = create_engine(DATABASE_URL)
+Base = declarative_base()
+
+class Stock(Base):
+    __tablename__ = 'stocks'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    symbol = Column(String, unique=True, nullable=False)
+    name = Column(String, nullable=False)
+    price = Column(Float)
+    bps1 = Column(Float)
+    bps2 = Column(Float)
+    bps3 = Column(Float)
+    bps4 = Column(Float)
+    pe_actual = Column(Float)
+    pe_historico = Column(Float)
+
+Base.metadata.create_all(engine)
+Session = sessionmaker(bind=engine)
+session = Session()
 
 async def fetch_sp500_symbols():
     async with aiohttp.ClientSession() as session:
@@ -22,67 +45,49 @@ async def main():
         raise Exception("No se encontró la tabla en la página de Wikipedia.")
 
     filas = tabla.find_all('tr')
-    datos = [["Symbol", "Name"]]
     for fila in filas[1:]:
         celdas = fila.find_all('td')
         if len(celdas) > 1:
             symbol = celdas[0].text.strip()
             name = celdas[1].text.strip()
-            datos.append([symbol, name])
+            if not session.query(Stock).filter_by(symbol=symbol).first():
+                stock = Stock(symbol=symbol, name=name)
+                session.add(stock)
 
-    wb = Workbook()
-    ws = wb.active
-    for row in datos:
-        ws.append(row)
+    session.commit()
 
-    ws.cell(row=1, column=3, value='Price')
-    ws.cell(row=1, column=4, value='BPS1')
-    ws.cell(row=1, column=5, value='BPS2')
-    ws.cell(row=1, column=6, value='BPS3')
-    ws.cell(row=1, column=7, value='BPS4')
-    ws.cell(row=1, column=8, value='P/E Actual')
-    ws.cell(row=1, column=9, value='P/E Histórico')
-
-    wb.save('acciones.xlsx')
-
-    wb = load_workbook('acciones.xlsx')
-    ws = wb.active
-
-    for idx, row in enumerate(ws.iter_rows(min_row=2, min_col=1, max_col=1, values_only=True), start=2):
-        symbol = row[0]
-        print(f'🔍 Buscando datos para {symbol}...')
+    for stock in session.query(Stock).all():
+        print(f'🔍 Buscando datos para {stock.symbol}...')
 
         try:
-            stock = yf.Ticker(symbol)
-            price = stock.history(period="1d")['Close'].iloc[-1]
-            ws.cell(row=idx, column=3, value=price)
-            print(f'✅ {symbol} - Precio: {price}')
+            yf_stock = yf.Ticker(stock.symbol)
+            price = float(yf_stock.history(period="1d")['Close'].iloc[-1])
+            stock.price = price
+            print(f'✅ {stock.symbol} - Precio: {price}')
 
-            earnings = stock.financials.loc['Diluted EPS'].dropna().tolist()[:5]
-            for i, eps in enumerate(earnings):
-                ws.cell(row=idx, column=4 + i, value=eps)
-            print(f'✅ {symbol} - EPS Históricos: {earnings}')
+            earnings = [float(eps) for eps in yf_stock.financials.loc['Diluted EPS'].dropna().tolist()[:5]]
+            if len(earnings) >= 4:
+                stock.bps1, stock.bps2, stock.bps3, stock.bps4 = earnings[:4]
+            print(f'✅ {stock.symbol} - EPS Históricos: {earnings}')
 
-            pe_actual = stock.info.get("trailingPE", "N/A")
-            ws.cell(row=idx, column=8, value=pe_actual)
-            print(f'✅ {symbol} - P/E Actual: {pe_actual}')
+            stock.pe_actual = float(yf_stock.info.get("trailingPE", "N/A"))
+            print(f'✅ {stock.symbol} - P/E Actual: {stock.pe_actual}')
 
             pe_historico = []
-            for i, eps in enumerate(earnings):
+            for eps in earnings:
                 if eps > 0:
                     pe_historico.append(price / eps)
             if pe_historico:
-                pe_historico_avg = sum(pe_historico) / len(pe_historico)
+                stock.pe_historico = sum(pe_historico) / len(pe_historico)
             else:
-                pe_historico_avg = "N/A"
-            ws.cell(row=idx, column=9, value=pe_historico_avg)
-            print(f'✅ {symbol} - P/E Histórico: {pe_historico_avg}')
+                stock.pe_historico = None
+            print(f'✅ {stock.symbol} - P/E Histórico: {stock.pe_historico}')
 
         except Exception as e:
-            print(f'❌ Error al obtener datos de {symbol}: {e}')
+            print(f'❌ Error al obtener datos de {stock.symbol}: {e}')
 
-    wb.save('acciones.xlsx')
-    print('\n✅ Proceso completado. Datos guardados en "acciones.xlsx".')
+    session.commit()
+    print('\n✅ Proceso completado. Datos guardados en la base de datos.')
 
 if __name__ == "__main__":
     asyncio.run(main())
