@@ -1,38 +1,40 @@
 import subprocess
 import os
+from datetime import datetime
+from apscheduler.schedulers.background import BackgroundScheduler
 import time
-from datetime import datetime, timedelta
 
 # Obtener la ruta absoluta del directorio actual
 current_dir = os.path.dirname(os.path.abspath(__file__))
 
 def ejecutar_scripts():
-    # Ejecutar Stocks2.py
+    print(f"Ejecutando scripts a las {datetime.now()}")
     subprocess.run(["python", os.path.join(current_dir, "Stocks2.py")])
-    # Ejecutar StocksAnalysis.py
     subprocess.run(["python", os.path.join(current_dir, "StocksAnalysis.py")])
-    # Ejecutar Main.py con streamlit
     subprocess.run(["streamlit", "run", os.path.join(current_dir, "Main.py")])
 
-def calcular_tiempo_espera():
+def verificar_y_ejecutar():
     ahora = datetime.now()
-    hoy_12 = ahora.replace(hour=12, minute=0, second=0, microsecond=0)
-    hoy_17 = ahora.replace(hour=17, minute=0, second=0, microsecond=0)
-
-    if ahora < hoy_12:
-        return (hoy_12 - ahora).total_seconds()
-    elif ahora < hoy_17:
-        return (hoy_17 - ahora).total_seconds()
-    else:
-        return ((hoy_12 + timedelta(days=1)) - ahora).total_seconds()
+    if ahora.hour >= 17 or ahora.hour < 12:
+        ejecutar_scripts()
+    elif ahora.hour >= 12:
+        ejecutar_scripts()
 
 # Verificar si ya pasó alguna de las horas programadas y ejecutar inmediatamente si es necesario
-ahora = datetime.now()
-if ahora.hour >= 17:
-    ejecutar_scripts()
+verificar_y_ejecutar()
 
-# Bucle principal para ejecutar los scripts a las horas programadas
-while True:
-    tiempo_espera = calcular_tiempo_espera()
-    time.sleep(tiempo_espera)
-    ejecutar_scripts()
+# Programar la ejecución de los scripts a las 12:00 y 17:00
+scheduler = BackgroundScheduler()
+scheduler.add_job(ejecutar_scripts, 'cron', hour=12, minute=0)
+scheduler.add_job(ejecutar_scripts, 'cron', hour=17, minute=0)
+scheduler.start()
+
+print("Scheduler iniciado. Esperando próximas ejecuciones...")
+
+# Mantener el script en ejecución
+try:
+    while True:
+        time.sleep(1)
+except KeyboardInterrupt:
+    print("Script detenido manualmente.")
+    scheduler.shutdown()
