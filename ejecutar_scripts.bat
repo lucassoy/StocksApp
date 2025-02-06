@@ -1,0 +1,1 @@
+python "C:\Users\lucas\OneDrive\Escritorio\Todo\Ejercicios\StocksApp\run_all.py"
