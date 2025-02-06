@@ -6,13 +6,9 @@ from sqlalchemy import create_engine, Column, String, Float, Integer, Boolean
 from sqlalchemy.orm import declarative_base, sessionmaker
 import logging
 
-# Configuración de logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# URL de Wikipedia con la lista de acciones del S&P 500
 URL_SP500 = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
-
-# Configuración de la base de datos
 DATABASE_URL = "postgresql://postgres:1234@localhost:5432/StocksApp"
 engine = create_engine(DATABASE_URL)
 Base = declarative_base()
@@ -39,8 +35,7 @@ async def fetch_sp500_symbols():
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(URL_SP500) as response:
-                html = await response.text()
-                return html
+                return await response.text()
     except Exception as e:
         logging.error(f"Error al obtener la lista de símbolos del S&P 500: {e}")
         return None
@@ -65,8 +60,7 @@ async def main():
             symbol = celdas[0].text.strip()
             name = celdas[1].text.strip()
             if not session.query(Stock).filter_by(symbol=symbol).first():
-                stock = Stock(symbol=symbol, name=name)
-                session.add(stock)
+                session.add(Stock(symbol=symbol, name=name))
 
     session.commit()
 
@@ -75,9 +69,8 @@ async def main():
 
         try:
             yf_stock = yf.Ticker(stock.symbol)
-            price = float(yf_stock.history(period="1d")['Close'].iloc[-1])
-            stock.price = price
-            logging.info(f'✅ {stock.symbol} - Precio: {price}')
+            stock.price = float(yf_stock.history(period="1d")['Close'].iloc[-1])
+            logging.info(f'✅ {stock.symbol} - Precio: {stock.price}')
 
             earnings = [float(eps) for eps in yf_stock.financials.loc['Diluted EPS'].dropna().tolist()[:5]]
             if len(earnings) >= 4:
@@ -87,14 +80,8 @@ async def main():
             stock.pe_actual = float(yf_stock.info.get("trailingPE", "N/A"))
             logging.info(f'✅ {stock.symbol} - P/E Actual: {stock.pe_actual}')
 
-            pe_historico = []
-            for eps in earnings:
-                if eps > 0:
-                    pe_historico.append(price / eps)
-            if pe_historico:
-                stock.pe_historico = sum(pe_historico) / len(pe_historico)
-            else:
-                stock.pe_historico = None
+            pe_historico = [stock.price / eps for eps in earnings if eps > 0]
+            stock.pe_historico = sum(pe_historico) / len(pe_historico) if pe_historico else None
             logging.info(f'✅ {stock.symbol} - P/E Histórico: {stock.pe_historico}')
 
         except Exception as e:

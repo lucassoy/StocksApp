@@ -2,7 +2,6 @@ from flask import Flask, jsonify, request
 from sqlalchemy import create_engine, Column, String, Float, Integer, Boolean, func
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-# Configuración de Flask y SQLAlchemy
 app = Flask(__name__)
 DATABASE_URL = "postgresql://postgres:1234@localhost:5432/StocksApp"
 engine = create_engine(DATABASE_URL)
@@ -10,7 +9,6 @@ Base = declarative_base()
 Session = sessionmaker(bind=engine)
 session = Session()
 
-# Definición de modelos
 class Stock(Base):
     __tablename__ = 'stocks'
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -37,36 +35,23 @@ class Compra(Base):
 
 Base.metadata.create_all(engine)
 
-# Rutas de la API
 @app.route('/stocks', methods=['GET'])
 def get_stocks():
     stocks = session.query(Stock).all()
-    data = [{
-        'Symbol': s.symbol,
-        'Name': s.name,
-        'Price': s.price,
-        'BPS1': s.bps1,
-        'BPS2': s.bps2,
-        'BPS3': s.bps3,
-        'BPS4': s.bps4,
-        'P/E Actual': s.pe_actual,
-        'P/E Histórico': s.pe_historico,
-        'Recomendado': s.recomendado
-    } for s in stocks]
-    return jsonify(data)
+    return jsonify([{
+        'Symbol': s.symbol, 'Name': s.name, 'Price': s.price,
+        'BPS1': s.bps1, 'BPS2': s.bps2, 'BPS3': s.bps3, 'BPS4': s.bps4,
+        'P/E Actual': s.pe_actual, 'P/E Histórico': s.pe_historico, 'Recomendado': s.recomendado
+    } for s in stocks])
 
 @app.route('/compras', methods=['GET'])
 def get_compras():
     compras = session.query(Compra).all()
-    data = [{
-        'Symbol': c.symbol,
-        'Name': c.name,
-        'Price': c.price,
-        'Quantity': c.quantity,
-        'Total Investment': c.total_investment,
+    return jsonify([{
+        'Symbol': c.symbol, 'Name': c.name, 'Price': c.price,
+        'Quantity': c.quantity, 'Total Investment': c.total_investment,
         'Portfolio Percentage': c.portfolio_percentage
-    } for c in compras]
-    return jsonify(data)
+    } for c in compras])
 
 @app.route('/compras', methods=['POST'])
 def add_compra():
@@ -89,19 +74,11 @@ def add_compra():
         compra.quantity += quantity
         compra.total_investment += total_investment
     else:
-        compra = Compra(
-            symbol=symbol, name=stock.name, price=price,
-            quantity=quantity, total_investment=total_investment, portfolio_percentage=0
-        )
-        session.add(compra)
+        session.add(Compra(symbol=symbol, name=stock.name, price=price, quantity=quantity, total_investment=total_investment, portfolio_percentage=0))
 
-    # Calcular y actualizar el porcentaje del portafolio
-    total_investment_all = session.query(Compra).with_entities(func.sum(Compra.total_investment)).scalar()
+    total_investment_all = session.query(func.sum(Compra.total_investment)).scalar()
     for compra in session.query(Compra).all():
-        if total_investment_all > 0:
-            compra.portfolio_percentage = (compra.total_investment / total_investment_all) * 100
-        else:
-            compra.portfolio_percentage = 0
+        compra.portfolio_percentage = (compra.total_investment / total_investment_all) * 100 if total_investment_all > 0 else 0
 
     session.commit()
     return jsonify({'message': 'Compra registrada'}), 201
@@ -127,13 +104,9 @@ def sell_stock():
     if compra.quantity == 0:
         session.delete(compra)
 
-    # Calcular y actualizar el porcentaje del portafolio
-    total_investment_all = session.query(Compra).with_entities(func.sum(Compra.total_investment)).scalar()
+    total_investment_all = session.query(func.sum(Compra.total_investment)).scalar()
     for compra in session.query(Compra).all():
-        if total_investment_all > 0:
-            compra.portfolio_percentage = (compra.total_investment / total_investment_all) * 100
-        else:
-            compra.portfolio_percentage = 0
+        compra.portfolio_percentage = (compra.total_investment / total_investment_all) * 100 if total_investment_all > 0 else 0
 
     session.commit()
     return jsonify({'message': 'Venta registrada'}), 200
@@ -141,10 +114,16 @@ def sell_stock():
 @app.route('/acciones-recomendadas', methods=['GET'])
 def get_recommended():
     recomendadas = session.query(Stock).filter_by(recomendado=True).all()
-    data = [{'Symbol': s.symbol, 'Name': s.name, 'Price': s.price} for s in recomendadas]
-    return jsonify(data)
+    return jsonify([{'Symbol': s.symbol, 'Name': s.name, 'Price': s.price} for s in recomendadas])
+
+@app.route('/acciones-comprar', methods=['GET'])
+def get_acciones_comprar():
+    acciones_comprar = session.query(Stock).filter(Stock.recomendado == True, Stock.pe_actual * 2 < Stock.pe_historico).all()
+    return jsonify([{'Symbol': s.symbol, 'Name': s.name, 'Price': s.price} for s in acciones_comprar])
+
 @app.route('/')
 def home():
     return "¡Bienvenido a StocksApp! La API está funcionando."
+
 if __name__ == '__main__':
     app.run(debug=True)

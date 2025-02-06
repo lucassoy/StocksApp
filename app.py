@@ -1,24 +1,20 @@
 import streamlit as st
 import requests
 
-# URL de la API Flask (ajústala según tu configuración)
 API_URL = "http://127.0.0.1:5000"
 
 st.title("📈 StocksApp - Gestión de Acciones")
 
-# Obtener y mostrar las acciones recomendadas
 st.subheader("📊 Acciones Recomendadas")
 recommended_response = requests.get(f"{API_URL}/acciones-recomendadas")
 if recommended_response.status_code == 200:
     try:
-        recommended_data = recommended_response.json()
-        st.table(recommended_data)
+        st.table(recommended_response.json())
     except requests.exceptions.JSONDecodeError:
         st.error("Error al decodificar la respuesta de las acciones recomendadas.")
 else:
     st.error("Error al obtener los datos de las acciones recomendadas.")
 
-# Formulario para comprar acciones
 st.subheader("🛒 Comprar Acción")
 buy_symbol = st.text_input("Símbolo de la acción", "")
 buy_quantity = st.number_input("Cantidad", min_value=1, step=1, value=1)
@@ -29,12 +25,10 @@ if st.button("Comprar"):
         st.success("Compra realizada con éxito")
     else:
         try:
-            error_message = buy_response.json().get("error", "Error en la compra")
+            st.error(buy_response.json().get("error", "Error en la compra"))
         except requests.exceptions.JSONDecodeError:
-            error_message = "Error en la compra"
-        st.error(error_message)
+            st.error("Error en la compra")
 
-# Formulario para vender acciones
 st.subheader("💰 Vender Acción")
 sell_symbol = st.text_input("Símbolo de la acción a vender", "")
 sell_quantity = st.number_input("Cantidad a vender", min_value=1, step=1, value=1)
@@ -45,21 +39,28 @@ if st.button("Vender"):
         st.success("Venta realizada con éxito")
     else:
         try:
-            error_message = sell_response.json().get("error", "Error en la venta")
+            st.error(sell_response.json().get("error", "Error en la venta"))
         except requests.exceptions.JSONDecodeError:
-            error_message = "Error en la venta"
-        st.error(error_message)
+            st.error("Error en la venta")
 
-# Obtener y mostrar las compras
 st.subheader("📜 Mis Compras")
 compras_response = requests.get(f"{API_URL}/compras")
 if compras_response.status_code == 200:
     try:
-        compras_data = compras_response.json()
-        st.table(compras_data)
+        st.table(compras_response.json())
     except requests.exceptions.JSONDecodeError:
         st.error("Error al decodificar la respuesta de las compras.")
 else:
     st.error("Error al obtener los datos de compras.")
+
+st.subheader("📈 Acciones a Comprar")
+acciones_comprar_response = requests.get(f"{API_URL}/acciones-comprar")
+if acciones_comprar_response.status_code == 200:
+    try:
+        st.table(acciones_comprar_response.json())
+    except requests.exceptions.JSONDecodeError:
+        st.error("Error al decodificar la respuesta de las acciones a comprar.")
+else:
+    st.error("Error al obtener los datos de las acciones a comprar.")
 
 st.caption("Desarrollado con Streamlit y Flask")
